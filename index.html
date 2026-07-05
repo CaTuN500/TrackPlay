@@ -39,7 +39,8 @@
         .playlist-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; color: rgba(255,255,255,0.7); font-size: 11px; }
         .playlist-item:hover { background: rgba(255,255,255,0.05); }
         .playlist-item.active { background: rgba(179,83,219,0.2); color: #fff; }
-        .edit-btn { background: none; border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.5); cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+        .edit-btn { background: rgba(179,83,219,0.2); border: 1px solid #b353db; color: #b353db; cursor: pointer; padding: 3px 7px; border-radius: 5px; font-size: 10px; }
+        .delete-btn { background: rgba(239,68,68,0.2); border: 1px solid #ef4444; color: #ef4444; cursor: pointer; padding: 3px 7px; border-radius: 5px; font-size: 10px; margin-left: 2px; }
         .upload-label { display: block; text-align: center; padding: 10px; border: 2px dashed rgba(255,255,255,0.15); border-radius: 10px; color: rgba(255,255,255,0.5); cursor: pointer; font-size: 12px; }
         .upload-label input { display: none; }
         .hidden { display: none !important; }
@@ -90,7 +91,7 @@
         <p>4. Выберите <b>«Аудио»</b></p>
         <p>5. Найдите <b>MP3 трек</b></p>
         <p>6. Нажмите <b>«Готово»</b></p>
-        <p style="color:#f59e0b;font-size:10px;">Треки хранятся в вашем браузере</p>
+        <p style="color:#10b981;font-size:10px;">✅ Треки сохраняются в браузере!</p>
         <button class="btn" onclick="hideHelp()">ЗАКРЫТЬ</button>
     </div>
 </div>
@@ -99,6 +100,21 @@
 let audio = new Audio(), playlist = [], currentTrack = -1, isPlaying = false, volume = 0.7, isShuffle = false, isRepeat = false;
 let audioContext = null, analyser = null, dataArray = null;
 
+// ЗАГРУЗКА СОХРАНЁННЫХ ТРЕКОВ
+const saved = localStorage.getItem('trackplay-saved');
+if (saved) {
+    try {
+        const data = JSON.parse(saved);
+        playlist = data.map(t => ({ name: t.name, artist: t.artist, url: t.url, duration: t.duration || 0 }));
+        renderPlaylist();
+    } catch(e) {}
+}
+
+function saveToStorage() {
+    const toSave = playlist.map(t => ({ name: t.name, artist: t.artist, url: t.url, duration: t.duration }));
+    localStorage.setItem('trackplay-saved', JSON.stringify(toSave));
+}
+
 function createEq() { const c = document.getElementById('eqWaves'); for (let i = 0; i < 40; i++) { const b = document.createElement('div'); b.className = 'eq-bar'; c.appendChild(b); } }
 function setupAnalyser() { if (!audioContext) { audioContext = new (window.AudioContext || window.webkitAudioContext)(); analyser = audioContext.createAnalyser(); analyser.fftSize = 128; const s = audioContext.createMediaElementSource(audio); s.connect(analyser); analyser.connect(audioContext.destination); dataArray = new Uint8Array(analyser.frequencyBinCount); } }
 function animateEq() { const bars = document.querySelectorAll('.eq-bar'); if (analyser && isPlaying) { analyser.getByteFrequencyData(dataArray); bars.forEach((b, i) => b.style.height = Math.max(2, (dataArray[i]||0)/255*28) + 'px'); } else { bars.forEach((b, i) => b.style.height = Math.max(2, 2 + Math.sin(Date.now()/400 + i*0.3)*6) + 'px'); } requestAnimationFrame(animateEq); }
@@ -106,15 +122,28 @@ function showHelp() { document.getElementById('helpBox').classList.remove('hidde
 function hideHelp() { document.getElementById('helpBox').classList.add('hidden'); }
 
 function addTracks(event) {
-    for (const file of event.target.files) {
-        const url = URL.createObjectURL(file);
-        const name = file.name.replace(/\.[^/.]+$/, '');
-        playlist.push({ name, artist: 'Мой трек', url, duration: 0 });
-        const temp = new Audio(url);
-        temp.onloadedmetadata = () => { playlist.find(x => x.url === url).duration = temp.duration; renderPlaylist(); };
+    const files = event.target.files;
+    let loaded = 0;
+    for (const file of files) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const url = e.target.result;
+            const name = file.name.replace(/\.[^/.]+$/, '');
+            playlist.push({ name, artist: 'Мой трек', url, duration: 0 });
+            const temp = new Audio(url);
+            temp.onloadedmetadata = () => {
+                const track = playlist.find(x => x.url === url);
+                if (track) { track.duration = temp.duration; saveToStorage(); renderPlaylist(); }
+            };
+            loaded++;
+            if (loaded === files.length) {
+                if (currentTrack === -1 && playlist.length) { currentTrack = 0; loadTrack(0); }
+                saveToStorage(); renderPlaylist();
+            }
+        };
+        reader.readAsDataURL(file);
     }
-    if (currentTrack === -1 && playlist.length) { currentTrack = 0; loadTrack(0); }
-    renderPlaylist(); event.target.value = '';
+    event.target.value = '';
 }
 
 function loadTrack(index) { if (index < 0 || index >= playlist.length) return; currentTrack = index; const t = playlist[index]; audio.src = t.url; audio.volume = volume; document.getElementById('trackName').textContent = t.name; document.getElementById('trackArtist').textContent = t.artist; renderPlaylist(); }
@@ -122,7 +151,7 @@ function togglePlay() { if (!playlist.length) return; if (currentTrack === -1) {
 function nextTrack() { if (!playlist.length) return; currentTrack = isShuffle ? Math.floor(Math.random()*playlist.length) : (currentTrack+1)%playlist.length; loadTrack(currentTrack); if (isPlaying) audio.play().catch(()=>{}); }
 function prevTrack() { if (!playlist.length) return; currentTrack = (currentTrack-1+playlist.length)%playlist.length; loadTrack(currentTrack); if (isPlaying) audio.play().catch(()=>{}); }
 audio.ontimeupdate = () => { if (audio.duration) { document.getElementById('progressFill').style.width = (audio.currentTime/audio.duration*100)+'%'; document.getElementById('currentTime').textContent = fmt(audio.currentTime); } };
-audio.onloadedmetadata = () => { document.getElementById('totalTime').textContent = fmt(audio.duration); if (playlist[currentTrack]) playlist[currentTrack].duration = audio.duration; };
+audio.onloadedmetadata = () => { document.getElementById('totalTime').textContent = fmt(audio.duration); if (playlist[currentTrack]) { playlist[currentTrack].duration = audio.duration; saveToStorage(); } };
 audio.onended = () => { if (isRepeat) { audio.currentTime = 0; audio.play().catch(()=>{}); } else nextTrack(); };
 function seek(e) { if (!audio.duration) return; audio.currentTime = (e.offsetX/e.target.offsetWidth)*audio.duration; }
 function setVol(e) { volume = Math.max(0, Math.min(1, e.offsetX/e.target.offsetWidth)); audio.volume = volume; document.getElementById('volFill').style.width = (volume*100)+'%'; }
@@ -131,14 +160,22 @@ function toggleRepeat() { isRepeat = !isRepeat; document.getElementById('repeatB
 
 function renameTrack(index) {
     const t = playlist[index];
-    const newName = prompt('Новое название:', t.name);
+    const newName = prompt('Название:', t.name);
     if (newName && newName.trim()) { t.name = newName.trim(); if (index === currentTrack) document.getElementById('trackName').textContent = t.name; }
     const newArtist = prompt('Исполнитель:', t.artist);
     if (newArtist && newArtist.trim()) { t.artist = newArtist.trim(); if (index === currentTrack) document.getElementById('trackArtist').textContent = t.artist; }
-    renderPlaylist();
+    saveToStorage(); renderPlaylist();
 }
 
-function renderPlaylist() { const c = document.getElementById('playlist'); if (!playlist.length) { c.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.3);padding:20px;">Плейлист пуст</div>'; return; } c.innerHTML = playlist.map((t, i) => `<div class="playlist-item ${i===currentTrack?'active':''}" onclick="playTrack(${i})"><span>${i===currentTrack&&isPlaying?'▶':i+1}</span><span style="flex:1;">${t.name}</span><span style="opacity:0.4;font-size:10px;">${fmt(t.duration)}</span><button class="edit-btn" onclick="event.stopPropagation();renameTrack(${i})">✎</button></div>`).join(''); }
+function deleteTrack(index) {
+    if (!confirm('Удалить трек «' + playlist[index].name + '»?')) return;
+    if (index === currentTrack) { audio.pause(); isPlaying = false; document.getElementById('playBtn').classList.add('play'); document.getElementById('playBtn').classList.remove('stop'); currentTrack = -1; }
+    playlist.splice(index, 1);
+    if (currentTrack >= playlist.length) currentTrack = playlist.length - 1;
+    saveToStorage(); renderPlaylist();
+}
+
+function renderPlaylist() { const c = document.getElementById('playlist'); if (!playlist.length) { c.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.3);padding:20px;">Плейлист пуст</div>'; return; } c.innerHTML = playlist.map((t, i) => `<div class="playlist-item ${i===currentTrack?'active':''}" onclick="playTrack(${i})"><span>${i===currentTrack&&isPlaying?'▶':i+1}</span><span style="flex:1;">${t.name}</span><span style="opacity:0.4;font-size:10px;">${fmt(t.duration)}</span><button class="edit-btn" onclick="event.stopPropagation();renameTrack(${i})">✎</button><button class="delete-btn" onclick="event.stopPropagation();deleteTrack(${i})">✕</button></div>`).join(''); }
 function playTrack(i) { loadTrack(i); audio.play().catch(()=>{}); isPlaying = true; document.getElementById('playBtn').classList.remove('play'); document.getElementById('playBtn').classList.add('stop'); setupAnalyser(); }
 function fmt(s) { if (!s||isNaN(s)) return '0:00'; const m = Math.floor(s/60); return m+':'+Math.floor(s%60).toString().padStart(2,'0'); }
 
