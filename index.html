@@ -102,7 +102,7 @@ let audioContext = null, analyser = null, dataArray = null, db = null;
 
 function openDB() {
     return new Promise(r => {
-        const req = indexedDB.open('trackplay-db2', 1);
+        const req = indexedDB.open('trackplay-v3', 1);
         req.onupgradeneeded = e => {
             if (!e.target.result.objectStoreNames.contains('tracks')) {
                 e.target.result.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
@@ -120,10 +120,18 @@ async function loadTracks() {
     const req = tx.objectStore('tracks').getAll();
     req.onsuccess = () => {
         playlist.forEach(t => URL.revokeObjectURL(t.url));
-        playlist = req.result.map(t => ({
-            id: t.id, name: t.name, artist: t.artist,
-            url: URL.createObjectURL(t.file), duration: t.duration || 0
-        }));
+        playlist = [];
+        const loaded = req.result;
+        const seen = new Set();
+        loaded.forEach(t => {
+            if (!seen.has(t.id)) {
+                seen.add(t.id);
+                playlist.push({
+                    id: t.id, name: t.name || 'Без названия', artist: t.artist || 'Неизвестен',
+                    url: URL.createObjectURL(t.file), duration: t.duration || 0
+                });
+            }
+        });
         renderPlaylist();
     };
 }
@@ -155,15 +163,9 @@ function addTracks(event) {
         const url = URL.createObjectURL(file);
         const track = { name, artist: 'Мой трек', url, duration: 0 };
         playlist.push(track);
-        
         saveTrack(name, 'Мой трек', file, 0);
-        
         const temp = new Audio(url);
-        temp.onloadedmetadata = () => {
-            track.duration = temp.duration;
-            saveTrack(name, 'Мой трек', file, temp.duration);
-            renderPlaylist();
-        };
+        temp.onloadedmetadata = () => { track.duration = temp.duration; saveTrack(name, 'Мой трек', file, temp.duration); renderPlaylist(); };
     }
     if (currentTrack === -1 && playlist.length) { currentTrack = 0; loadTrack(0); }
     renderPlaylist(); event.target.value = '';
@@ -181,17 +183,24 @@ function setVol(e) { volume = Math.max(0, Math.min(1, e.offsetX/e.target.offsetW
 function toggleShuffle() { isShuffle = !isShuffle; document.getElementById('shuffleBtn').classList.toggle('active', isShuffle); }
 function toggleRepeat() { isRepeat = !isRepeat; document.getElementById('repeatBtn').classList.toggle('active', isRepeat); }
 
-function renameTrack(index) {
+async function renameTrack(index) {
     const t = playlist[index];
     const newName = prompt('Название:', t.name);
     if (newName && newName.trim()) { t.name = newName.trim(); if (index === currentTrack) document.getElementById('trackName').textContent = t.name; }
     const newArtist = prompt('Исполнитель:', t.artist);
     if (newArtist && newArtist.trim()) { t.artist = newArtist.trim(); if (index === currentTrack) document.getElementById('trackArtist').textContent = t.artist; }
+    if (t.id) {
+        await openDB();
+        const tx = db.transaction('tracks', 'readwrite');
+        const store = tx.objectStore('tracks');
+        const req = store.get(t.id);
+        req.onsuccess = () => { const data = req.result; if (data) { data.name = t.name; data.artist = t.artist; store.put(data); } };
+    }
     renderPlaylist();
 }
 
 async function deleteTrack(index) {
-    if (!confirm('Удалить трек «' + playlist[index].name + '»?')) return;
+    if (!confirm('Удалить «' + playlist[index].name + '»?')) return;
     if (index === currentTrack) { audio.pause(); isPlaying = false; document.getElementById('playBtn').classList.add('play'); document.getElementById('playBtn').classList.remove('stop'); currentTrack = -1; }
     const track = playlist[index];
     if (track.id) await removeTrackFromDB(track.id);
