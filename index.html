@@ -98,13 +98,11 @@
 
 <script>
 let audio = new Audio(), playlist = [], currentTrack = -1, isPlaying = false, volume = 0.7, isShuffle = false, isRepeat = false;
-let audioContext = null, analyser = null, dataArray = null;
-let db = null;
+let audioContext = null, analyser = null, dataArray = null, db = null;
 
-// ОТКРЫТИЕ БАЗЫ
 function openDB() {
     return new Promise(r => {
-        const req = indexedDB.open('trackplay-db', 1);
+        const req = indexedDB.open('trackplay-db2', 1);
         req.onupgradeneeded = e => {
             if (!e.target.result.objectStoreNames.contains('tracks')) {
                 e.target.result.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
@@ -115,35 +113,28 @@ function openDB() {
     });
 }
 
-// ЗАГРУЗКА ТРЕКОВ ИЗ БАЗЫ
 async function loadTracks() {
     await openDB();
     if (!db) return;
     const tx = db.transaction('tracks', 'readonly');
-    const store = tx.objectStore('tracks');
-    const req = store.getAll();
+    const req = tx.objectStore('tracks').getAll();
     req.onsuccess = () => {
+        playlist.forEach(t => URL.revokeObjectURL(t.url));
         playlist = req.result.map(t => ({
-            id: t.id,
-            name: t.name,
-            artist: t.artist,
-            url: URL.createObjectURL(t.file),
-            duration: t.duration || 0
+            id: t.id, name: t.name, artist: t.artist,
+            url: URL.createObjectURL(t.file), duration: t.duration || 0
         }));
         renderPlaylist();
     };
 }
 
-// СОХРАНЕНИЕ ТРЕКА В БАЗУ
 async function saveTrack(name, artist, file, duration) {
     await openDB();
     if (!db) return;
     const tx = db.transaction('tracks', 'readwrite');
-    const store = tx.objectStore('tracks');
-    store.put({ name, artist, file, duration });
+    tx.objectStore('tracks').put({ name, artist, file, duration });
 }
 
-// УДАЛЕНИЕ ТРЕКА ИЗ БАЗЫ
 async function removeTrackFromDB(id) {
     await openDB();
     if (!db) return;
@@ -162,9 +153,11 @@ function addTracks(event) {
     for (const file of files) {
         const name = file.name.replace(/\.[^/.]+$/, '');
         const url = URL.createObjectURL(file);
-        const track = { name, artist: 'Мой трек', url, duration: 0, file };
+        const track = { name, artist: 'Мой трек', url, duration: 0 };
         playlist.push(track);
+        
         saveTrack(name, 'Мой трек', file, 0);
+        
         const temp = new Audio(url);
         temp.onloadedmetadata = () => {
             track.duration = temp.duration;
@@ -202,6 +195,7 @@ async function deleteTrack(index) {
     if (index === currentTrack) { audio.pause(); isPlaying = false; document.getElementById('playBtn').classList.add('play'); document.getElementById('playBtn').classList.remove('stop'); currentTrack = -1; }
     const track = playlist[index];
     if (track.id) await removeTrackFromDB(track.id);
+    URL.revokeObjectURL(track.url);
     playlist.splice(index, 1);
     if (currentTrack >= playlist.length) currentTrack = playlist.length - 1;
     renderPlaylist();
