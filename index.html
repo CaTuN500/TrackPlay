@@ -91,7 +91,7 @@
         <p>4. Выберите <b>«Аудио»</b></p>
         <p>5. Найдите <b>MP3 трек</b></p>
         <p>6. Нажмите <b>«Готово»</b></p>
-        <p style="color:#10b981;font-size:10px;">✅ Треки сохраняются в браузере!</p>
+        <p style="color:#10b981;font-size:10px;">✅ Треки сохраняются навсегда!</p>
         <button class="btn" onclick="hideHelp()">ЗАКРЫТЬ</button>
     </div>
 </div>
@@ -99,20 +99,56 @@
 <script>
 let audio = new Audio(), playlist = [], currentTrack = -1, isPlaying = false, volume = 0.7, isShuffle = false, isRepeat = false;
 let audioContext = null, analyser = null, dataArray = null;
+let db = null;
 
-// ЗАГРУЗКА СОХРАНЁННЫХ ТРЕКОВ
-const saved = localStorage.getItem('trackplay-saved');
-if (saved) {
-    try {
-        const data = JSON.parse(saved);
-        playlist = data.map(t => ({ name: t.name, artist: t.artist, url: t.url, duration: t.duration || 0 }));
-        renderPlaylist();
-    } catch(e) {}
+// ОТКРЫТИЕ БАЗЫ
+function openDB() {
+    return new Promise(r => {
+        const req = indexedDB.open('trackplay-db', 1);
+        req.onupgradeneeded = e => {
+            if (!e.target.result.objectStoreNames.contains('tracks')) {
+                e.target.result.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
+            }
+        };
+        req.onsuccess = e => { db = e.target.result; r(); };
+        req.onerror = () => r();
+    });
 }
 
-function saveToStorage() {
-    const toSave = playlist.map(t => ({ name: t.name, artist: t.artist, url: t.url, duration: t.duration }));
-    localStorage.setItem('trackplay-saved', JSON.stringify(toSave));
+// ЗАГРУЗКА ТРЕКОВ ИЗ БАЗЫ
+async function loadTracks() {
+    await openDB();
+    if (!db) return;
+    const tx = db.transaction('tracks', 'readonly');
+    const store = tx.objectStore('tracks');
+    const req = store.getAll();
+    req.onsuccess = () => {
+        playlist = req.result.map(t => ({
+            id: t.id,
+            name: t.name,
+            artist: t.artist,
+            url: URL.createObjectURL(t.file),
+            duration: t.duration || 0
+        }));
+        renderPlaylist();
+    };
+}
+
+// СОХРАНЕНИЕ ТРЕКА В БАЗУ
+async function saveTrack(name, artist, file, duration) {
+    await openDB();
+    if (!db) return;
+    const tx = db.transaction('tracks', 'readwrite');
+    const store = tx.objectStore('tracks');
+    store.put({ name, artist, file, duration });
+}
+
+// УДАЛЕНИЕ ТРЕКА ИЗ БАЗЫ
+async function removeTrackFromDB(id) {
+    await openDB();
+    if (!db) return;
+    const tx = db.transaction('tracks', 'readwrite');
+    tx.objectStore('tracks').delete(id);
 }
 
 function createEq() { const c = document.getElementById('eqWaves'); for (let i = 0; i < 40; i++) { const b = document.createElement('div'); b.className = 'eq-bar'; c.appendChild(b); } }
@@ -123,27 +159,21 @@ function hideHelp() { document.getElementById('helpBox').classList.add('hidden')
 
 function addTracks(event) {
     const files = event.target.files;
-    let loaded = 0;
     for (const file of files) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const url = e.target.result;
-            const name = file.name.replace(/\.[^/.]+$/, '');
-            playlist.push({ name, artist: 'Мой трек', url, duration: 0 });
-            const temp = new Audio(url);
-            temp.onloadedmetadata = () => {
-                const track = playlist.find(x => x.url === url);
-                if (track) { track.duration = temp.duration; saveToStorage(); renderPlaylist(); }
-            };
-            loaded++;
-            if (loaded === files.length) {
-                if (currentTrack === -1 && playlist.length) { currentTrack = 0; loadTrack(0); }
-                saveToStorage(); renderPlaylist();
-            }
+        const name = file.name.replace(/\.[^/.]+$/, '');
+        const url = URL.createObjectURL(file);
+        const track = { name, artist: 'Мой трек', url, duration: 0, file };
+        playlist.push(track);
+        saveTrack(name, 'Мой трек', file, 0);
+        const temp = new Audio(url);
+        temp.onloadedmetadata = () => {
+            track.duration = temp.duration;
+            saveTrack(name, 'Мой трек', file, temp.duration);
+            renderPlaylist();
         };
-        reader.readAsDataURL(file);
     }
-    event.target.value = '';
+    if (currentTrack === -1 && playlist.length) { currentTrack = 0; loadTrack(0); }
+    renderPlaylist(); event.target.value = '';
 }
 
 function loadTrack(index) { if (index < 0 || index >= playlist.length) return; currentTrack = index; const t = playlist[index]; audio.src = t.url; audio.volume = volume; document.getElementById('trackName').textContent = t.name; document.getElementById('trackArtist').textContent = t.artist; renderPlaylist(); }
@@ -151,7 +181,7 @@ function togglePlay() { if (!playlist.length) return; if (currentTrack === -1) {
 function nextTrack() { if (!playlist.length) return; currentTrack = isShuffle ? Math.floor(Math.random()*playlist.length) : (currentTrack+1)%playlist.length; loadTrack(currentTrack); if (isPlaying) audio.play().catch(()=>{}); }
 function prevTrack() { if (!playlist.length) return; currentTrack = (currentTrack-1+playlist.length)%playlist.length; loadTrack(currentTrack); if (isPlaying) audio.play().catch(()=>{}); }
 audio.ontimeupdate = () => { if (audio.duration) { document.getElementById('progressFill').style.width = (audio.currentTime/audio.duration*100)+'%'; document.getElementById('currentTime').textContent = fmt(audio.currentTime); } };
-audio.onloadedmetadata = () => { document.getElementById('totalTime').textContent = fmt(audio.duration); if (playlist[currentTrack]) { playlist[currentTrack].duration = audio.duration; saveToStorage(); } };
+audio.onloadedmetadata = () => { document.getElementById('totalTime').textContent = fmt(audio.duration); };
 audio.onended = () => { if (isRepeat) { audio.currentTime = 0; audio.play().catch(()=>{}); } else nextTrack(); };
 function seek(e) { if (!audio.duration) return; audio.currentTime = (e.offsetX/e.target.offsetWidth)*audio.duration; }
 function setVol(e) { volume = Math.max(0, Math.min(1, e.offsetX/e.target.offsetWidth)); audio.volume = volume; document.getElementById('volFill').style.width = (volume*100)+'%'; }
@@ -164,15 +194,17 @@ function renameTrack(index) {
     if (newName && newName.trim()) { t.name = newName.trim(); if (index === currentTrack) document.getElementById('trackName').textContent = t.name; }
     const newArtist = prompt('Исполнитель:', t.artist);
     if (newArtist && newArtist.trim()) { t.artist = newArtist.trim(); if (index === currentTrack) document.getElementById('trackArtist').textContent = t.artist; }
-    saveToStorage(); renderPlaylist();
+    renderPlaylist();
 }
 
-function deleteTrack(index) {
+async function deleteTrack(index) {
     if (!confirm('Удалить трек «' + playlist[index].name + '»?')) return;
     if (index === currentTrack) { audio.pause(); isPlaying = false; document.getElementById('playBtn').classList.add('play'); document.getElementById('playBtn').classList.remove('stop'); currentTrack = -1; }
+    const track = playlist[index];
+    if (track.id) await removeTrackFromDB(track.id);
     playlist.splice(index, 1);
     if (currentTrack >= playlist.length) currentTrack = playlist.length - 1;
-    saveToStorage(); renderPlaylist();
+    renderPlaylist();
 }
 
 function renderPlaylist() { const c = document.getElementById('playlist'); if (!playlist.length) { c.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.3);padding:20px;">Плейлист пуст</div>'; return; } c.innerHTML = playlist.map((t, i) => `<div class="playlist-item ${i===currentTrack?'active':''}" onclick="playTrack(${i})"><span>${i===currentTrack&&isPlaying?'▶':i+1}</span><span style="flex:1;">${t.name}</span><span style="opacity:0.4;font-size:10px;">${fmt(t.duration)}</span><button class="edit-btn" onclick="event.stopPropagation();renameTrack(${i})">✎</button><button class="delete-btn" onclick="event.stopPropagation();deleteTrack(${i})">✕</button></div>`).join(''); }
@@ -181,6 +213,7 @@ function fmt(s) { if (!s||isNaN(s)) return '0:00'; const m = Math.floor(s/60); r
 
 createEq(); animateEq();
 document.getElementById('volFill').style.width = '70%';
+loadTracks();
 </script>
 </body>
 </html>
